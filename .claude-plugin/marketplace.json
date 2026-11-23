@@ -1,0 +1,11 @@
+{
+  "name": "arauto",
+  "owner": { "name": "Macks Wendhell" },
+  "plugins": [
+    {
+      "name": "arauto",
+      "source": "./",
+      "description": "Dá voz ao Claude Code com a Fish Audio (Drama 3): avisa falando quando termina, quando precisa de você ou quando algo dá errado."
+    }
+  ]
+}
