@@ -198,8 +198,6 @@ export const register: Register = on => {
   let ultimoErro = 0
   let contador = 0
   let fishFalhando = false
-  // O que a pessoa colou no campo da chave, só até salvar; nunca vai para o estado.
-  let rascunhoChave = ''
   const pendentes = new Map<string, Pendencia>()
 
   on('session.start', async ($, e, next) => {
@@ -516,7 +514,6 @@ export const register: Register = on => {
     }
 
     const salvarChave = async (texto: string) => {
-      rascunhoChave = ''
       if (!texto.trim()) return
       await update($, chaveFish, atual => ({ ...atual, aviso: 'Testando a chave na Fish…' }))
       const r = await gravarChave(rodarScript, texto).catch(() => null)
@@ -537,13 +534,11 @@ export const register: Register = on => {
     }
 
     const removerChave = async () => {
-      rascunhoChave = ''
       await apagarChave(rodarScript).catch(() => undefined)
       await update($, chaveFish, () => SEM_CHAVE)
     }
 
     const editarChave = async (editando: boolean) => {
-      rascunhoChave = ''
       await update($, chaveFish, atual => ({ ...atual, editando, aviso: undefined }))
     }
 
@@ -1135,21 +1130,19 @@ export const register: Register = on => {
             {pedirChave ? (
               <Box key="chave-campo" flexDirection="column" gap={1}>
                 <Text>Chave da Fish Audio</Text>
-                <Input
-                  key="chave-entrada"
-                  placeholder="Cole aqui a chave (sk-fish-…)"
-                  submitLabel="salvar"
-                  onInput={v => {
-                    rascunhoChave = v
-                  }}
-                  onSubmit={v => void n?.salvarChave(v)}
-                />
-                <Box flexDirection="row" gap={1}>
-                  <Button key="chave-salvar" label="Salvar" variant="primary" onPress={() => void n?.salvarChave(rascunhoChave)} />
-                  {k.editando && k.situacao !== 'sem-chave' && (
-                    <Button key="chave-cancelar" label="Cancelar" onPress={() => void n?.editarChave(false)} />
-                  )}
+                <Box width="100%">
+                  <Input
+                    key="chave-entrada"
+                    placeholder="Cole a chave aqui"
+                    submitLabel="Salvar"
+                    onSubmit={v => void n?.salvarChave(v)}
+                  />
                 </Box>
+                {k.editando && k.situacao !== 'sem-chave' && (
+                  <Box flexDirection="row">
+                    <Button key="chave-cancelar" label="Cancelar" onPress={() => void n?.editarChave(false)} />
+                  </Box>
+                )}
               </Box>
             ) : (
               linha('chave', 'Chave da Fish Audio', <Text dimColor>{mascarar(k.prefixo)}</Text>)
