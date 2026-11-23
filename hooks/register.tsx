@@ -759,7 +759,7 @@ export const register: Register = on => {
     const c = await read($, config)
     const n = nucleo
     if (n && ligada(c, 'vozesAgente') && !e.parentAgentId) {
-      const tipo = tipoDeAgente(e.subagentType)
+      const tipo = tipoDeAgente(`${e.subagentType} ${e.text.slice(0, 400)}`)
       const situacao = e.status === 'completed' ? 'terminei' : e.status === 'failed' ? 'falhei' : 'fui interrompido'
       n.enfileirar({
         tipo: 'agente',
