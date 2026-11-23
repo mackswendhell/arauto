@@ -1,6 +1,6 @@
 {
   "name": "arauto",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dá voz ao Claude Code: avisa falando quando termina, quando precisa de você ou quando algo dá errado.",
   "types": "./types/index.d.ts"
 }

@@ -280,6 +280,10 @@ export const register: Register = on => {
             continue
           }
           if (tarefa.pendencia && !pendentes.has(tarefa.pendencia)) continue
+          try {
+            const raiz = await $.session.root()
+            projeto = raiz.split('/').filter(Boolean).pop() ?? projeto
+          } catch {}
           const comPrefixo = c.dizerProjeto && projeto !== '' && !tarefa.semPrefixo
           const texto = comPrefixo ? `${projeto}. ${gerada.texto}` : gerada.texto
           const motorPedido = tarefa.motor ?? c.motor
