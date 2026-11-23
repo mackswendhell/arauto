@@ -8,11 +8,13 @@ function motor(
   store: Record<string, unknown> = {},
   fishFalha = false,
   semTocador = false,
+  chaveInicial = 'sk-fish-0000aaaa',
 ) {
   const ditas: { texto: string; voz?: string | string[]; motor: 'fish' | 'mac' }[] = []
   const corpos: Record<string, unknown>[] = []
   const tocados: string[] = []
   const pedidosAoModelo: string[] = []
+  const chaveGuardada = { valor: chaveInicial }
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on, { config: { funcoes: { temaPersonagem: false } }, ...store })
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -70,6 +72,22 @@ function motor(
     if (e.argv[0] === '/usr/bin/pkill') {
       return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (e.init?.env?.FISH_BODY === undefined) {
+      const script = e.argv[2] ?? ''
+      const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+      if (!script.includes('read -r k') && script.includes('rm -f')) {
+        chaveGuardada.valor = ''
+        return ok('sem-chave\n')
+      }
+      if (script.includes('read -r k')) {
+        const nova = (e.init?.stdin ?? '').trim()
+        if (!nova) return ok('vazia\n')
+        if (!nova.startsWith('sk-fish-')) return ok('invalida\n')
+        chaveGuardada.valor = nova
+        return ok(`conectada ${nova.slice(0, 8)}\n`)
+      }
+      return ok(chaveGuardada.valor ? `conectada ${chaveGuardada.valor.slice(0, 8)}\n` : 'sem-chave\n')
+    }
     if (fishFalha) {
       return { value: { exitCode: 22, stdout: '', stderr: 'curl: (22) The requested URL returned error: 402', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -84,7 +102,7 @@ function motor(
     return { value: undefined }
   })
   on('ui.log', () => ({ value: undefined }))
-  return { ditas, pedidosAoModelo, clock, tocados, corpos, cacheUsado }
+  return { ditas, pedidosAoModelo, clock, tocados, corpos, cacheUsado, chaveGuardada }
 }
 
 const MORDOMO = 'd9bc9ab6317040d28307ee6d89c73ca0'
@@ -484,4 +502,44 @@ test('cada seção aberta: rótulo à esquerda, controle à direita', async ($, 
     expect(['Button', 'Select', 'Text']).toContain(direita?.type)
   }
   await painel.unmount()
+})
+
+test('a chave da Fish aparece mascarada, troca pelo campo e a recusada não substitui a anterior', async ($, on) => {
+  const { chaveGuardada } = motor(on)
+  on('session.usage', () => ({ value: { startedAt: 0, context: {}, rateLimits: [], cost: { usd: 0.42 } } as never }))
+  await $.session.start(inicio)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const lateral = await $.ui.mount({ ...PAINEL, surface, props: { ...PAINEL.props, placement: 'dock' } })
+    if (surface === 'desktop') await lateral.press({ key: 'secao-config' })
+    expect(await lateral.find({ type: 'Text', text: /^sk-fish-••••••••$/ })).toBeDefined()
+    expect(await lateral.find({ type: 'Text', text: /0000aaaa/ })).toBeUndefined()
+    expect(await lateral.find({ type: 'Text', text: /Fish Audio conectada/ })).toBeDefined()
+    await lateral.press({ key: 'chave-trocar' })
+    await lateral.input({ key: 'chave-entrada', text: 'chave-errada' })
+    expect(chaveGuardada.valor).toBe('sk-fish-0000aaaa')
+    expect(await lateral.find({ type: 'Text', text: /anterior continua valendo/ })).toBeDefined()
+    await lateral.input({ key: 'chave-entrada', text: 'sk-fish-1111bbbb', kind: 'change' })
+    await lateral.press({ key: 'chave-salvar' })
+    expect(chaveGuardada.valor).toBe('sk-fish-1111bbbb')
+    expect(await lateral.find({ key: 'chave-entrada' })).toBeUndefined()
+    expect(await lateral.find({ type: 'Text', text: /^sk-fish-••••••••$/ })).toBeDefined()
+    chaveGuardada.valor = 'sk-fish-0000aaaa'
+    await lateral.unmount()
+  }
+})
+
+test('sem chave, o painel pede para colar e explica que fala com a voz do Mac', async ($, on) => {
+  const { chaveGuardada } = motor(on, undefined, {}, false, false, '')
+  on('session.usage', () => ({ value: { startedAt: 0, context: {}, rateLimits: [], cost: { usd: 0.42 } } as never }))
+  await $.session.start(inicio)
+  const lateral = await $.ui.mount({ ...PAINEL, surface: 'desktop', props: { ...PAINEL.props, placement: 'dock' } })
+  await lateral.press({ key: 'secao-config' })
+  expect(await lateral.find({ key: 'chave-entrada' })).toBeDefined()
+  expect(await lateral.find({ type: 'Text', text: /voz do Mac/ })).toBeDefined()
+  await lateral.input({ key: 'chave-entrada', text: '  sk-fish-2222cccc  ' })
+  expect(chaveGuardada.valor).toBe('sk-fish-2222cccc')
+  await lateral.press({ key: 'chave-apagar' })
+  expect(chaveGuardada.valor).toBe('')
+  expect(await lateral.find({ key: 'chave-entrada' })).toBeDefined()
+  await lateral.unmount()
 })

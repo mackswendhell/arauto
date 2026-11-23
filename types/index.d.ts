@@ -84,6 +84,16 @@ export type Rodada = { pedido: string; resposta: string; segundos: number }
 
 export type Secao = 'agora' | 'funcoes' | 'voz' | 'config'
 
+export type SituacaoChave = 'conectada' | 'invalida' | 'sem-conexao' | 'sem-chave'
+
+// Só o começo da chave (sk-fish-), para mostrar mascarada; a chave inteira nunca fica no estado.
+export type ChaveFish = {
+  situacao: SituacaoChave
+  prefixo: string
+  editando: boolean
+  aviso?: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     arauto: {
@@ -94,6 +104,7 @@ declare module 'claude-code' {
       rodadas: Shaped<Rodada[]>
       abertas: Shaped<Secao[]>
       saudou: boolean
+      chave: Shaped<ChaveFish>
     }
   }
 }

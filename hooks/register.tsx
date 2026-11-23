@@ -1,13 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
 
-import type { Config, Emocao, Fala, FuncaoId, Motor, Persona, Replica, Secao, Tempos, TipoAgente, TipoFala } from '../types'
+import type { ChaveFish, Config, Emocao, Fala, FuncaoId, Motor, Persona, Replica, Secao, Tempos, TipoAgente, TipoFala } from '../types'
 import { PERSONAS, fraseFixa, gerarDialogo, gerarFrase, limpar } from './fala'
 import type { PedidoDeFrase } from './fala'
 import { MOTORES, VOZES_AGENTE_PADRAO, VOZ_PADRAO, custoFish, motorDe, nomeDaVoz, parceira } from './voz'
 import type { Recursos } from './voz'
 import { extrairLinha, instrucaoDaLinha, temLinha, tirarLinha } from './linha'
 import type { LinhaFalada } from './linha'
+import { SEM_CHAVE, apagarChave, gravarChave, legendaDaChave, lerChave, mascarar } from './chave'
 
 const PANE = 'arauto'
 const CARTAO = 'arauto-cartao'
@@ -75,6 +76,7 @@ const gasto = atom(
 const rodadas = atom({ plugin: 'arauto', key: 'rodadas' } as const, [], { shape: 'rodadas-1' })
 const abertas = atom({ plugin: 'arauto', key: 'abertas' } as const, ['agora'], { shape: 'abertas-1' })
 const saudou = atom({ plugin: 'arauto', key: 'saudou' } as const, false)
+const chaveFish = atom({ plugin: 'arauto', key: 'chave' } as const, SEM_CHAVE, { shape: 'chave-1' })
 
 type Gerada = { texto: string; emocao: Emocao; replicas?: Replica[] }
 
@@ -120,6 +122,10 @@ type Nucleo = {
   resumir: () => Promise<string>
   abrirPainel: () => Promise<void>
   minimizar: () => Promise<void>
+  atualizarChave: () => Promise<void>
+  salvarChave: (texto: string) => Promise<void>
+  apagarChave: () => Promise<void>
+  editarChave: (editando: boolean) => Promise<void>
   depois: (ms: number, fn: () => void) => Timer
 }
 
@@ -192,6 +198,8 @@ export const register: Register = on => {
   let ultimoErro = 0
   let contador = 0
   let fishFalhando = false
+  // O que a pessoa colou no campo da chave, só até salvar; nunca vai para o estado.
+  let rascunhoChave = ''
   const pendentes = new Map<string, Pendencia>()
 
   on('session.start', async ($, e, next) => {
@@ -499,6 +507,46 @@ export const register: Register = on => {
       await $.ui.open({ id: CARTAO, title: 'Arauto', placement: 'widget' })
     }
 
+    const rodarScript = (argv: readonly string[], init?: { stdin?: string; timeoutMs?: number }) =>
+      $.process.run(argv, init)
+
+    const atualizarChave = async () => {
+      const lida = await lerChave(rodarScript).catch(() => null)
+      if (lida) await update($, chaveFish, atual => ({ ...atual, ...lida, aviso: undefined }))
+    }
+
+    const salvarChave = async (texto: string) => {
+      rascunhoChave = ''
+      if (!texto.trim()) return
+      await update($, chaveFish, atual => ({ ...atual, aviso: 'Testando a chave na Fish…' }))
+      const r = await gravarChave(rodarScript, texto).catch(() => null)
+      if (!r) {
+        await update($, chaveFish, atual => ({ ...atual, aviso: 'Não consegui guardar a chave. Tente de novo.' }))
+      } else if (r.recusada) {
+        await update($, chaveFish, atual => ({
+          ...atual,
+          editando: true,
+          aviso: atual.situacao === 'sem-chave'
+            ? 'A Fish recusou essa chave. Confira e cole de novo.'
+            : 'A Fish recusou essa chave. A anterior continua valendo.',
+        }))
+      } else if (!r.vazia) {
+        fishFalhando = false
+        await update($, chaveFish, () => ({ ...r.chave, editando: false }))
+      }
+    }
+
+    const removerChave = async () => {
+      rascunhoChave = ''
+      await apagarChave(rodarScript).catch(() => undefined)
+      await update($, chaveFish, () => SEM_CHAVE)
+    }
+
+    const editarChave = async (editando: boolean) => {
+      rascunhoChave = ''
+      await update($, chaveFish, atual => ({ ...atual, editando, aviso: undefined }))
+    }
+
     nucleo = {
       enfileirar,
       frase,
@@ -511,8 +559,13 @@ export const register: Register = on => {
       resumir,
       abrirPainel,
       minimizar,
+      atualizarChave,
+      salvarChave,
+      apagarChave: removerChave,
+      editarChave,
       depois: (ms, fn) => $.clock.after(ms, fn),
     }
+    void atualizarChave()
 
     const salvo = (await $.store.get('config')) as Partial<Config> | undefined
     const atualizado = salvo?.versao === VERSAO_CONFIG
@@ -827,7 +880,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE && e.requestId !== CARTAO) return next(e)
-    const { Box, Text, Button, Select } = $.ui.resolve(e)
+    const { Box, Text, Button, Select, Input } = $.ui.resolve(e)
     const n = nucleo
     const c = await read($, config)
     const fala = await read($, agora)
@@ -871,6 +924,8 @@ export const register: Register = on => {
 
     const lista = await read($, abertas)
     const g = await read($, gasto)
+    const k: ChaveFish = await read($, chaveFish)
+    const pedirChave = k.situacao === 'sem-chave' || k.editando
     const uso = await $.session.usage()
     const vozes = motor.vozes.map(v => ({ value: v.id, label: v.nome }))
 
@@ -896,7 +951,11 @@ export const register: Register = on => {
         <Button
           key={`secao-${id}`}
           plain
-          onPress={() => update($, abertas, l => (l.includes(id) ? l.filter(x => x !== id) : [...l, id]))}
+          onPress={async () => {
+            const abrindo = !(await read($, abertas)).includes(id)
+            await update($, abertas, l => (l.includes(id) ? l.filter(x => x !== id) : [...l, id]))
+            if (abrindo && id === 'config') void n?.atualizarChave()
+          }}
         >
           {`${lista.includes(id) ? '▾' : '▸'} ${titulo}`}
         </Button>
@@ -1073,6 +1132,35 @@ export const register: Register = on => {
           'config',
           'Configurações',
           <Box flexDirection="column" gap={1}>
+            {pedirChave ? (
+              <Box key="chave-campo" flexDirection="column" gap={1}>
+                <Text>Chave da Fish Audio</Text>
+                <Input
+                  key="chave-entrada"
+                  placeholder="Cole aqui a chave (sk-fish-…)"
+                  submitLabel="salvar"
+                  onInput={v => {
+                    rascunhoChave = v
+                  }}
+                  onSubmit={v => void n?.salvarChave(v)}
+                />
+                <Box flexDirection="row" gap={1}>
+                  <Button key="chave-salvar" label="Salvar" variant="primary" onPress={() => void n?.salvarChave(rascunhoChave)} />
+                  {k.editando && k.situacao !== 'sem-chave' && (
+                    <Button key="chave-cancelar" label="Cancelar" onPress={() => void n?.editarChave(false)} />
+                  )}
+                </Box>
+              </Box>
+            ) : (
+              linha('chave', 'Chave da Fish Audio', <Text dimColor>{mascarar(k.prefixo)}</Text>)
+            )}
+            <Text dimColor>{legendaDaChave(k)}</Text>
+            {!pedirChave && (
+              <Box key="chave-botoes" flexDirection="row" gap={1}>
+                <Button key="chave-trocar" label="Trocar" onPress={() => void n?.editarChave(true)} />
+                <Button key="chave-apagar" label="Apagar" onPress={() => void n?.apagarChave()} />
+              </Box>
+            )}
             {linha(
               'tamanho',
               'Tamanho da fala',

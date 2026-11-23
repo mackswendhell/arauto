@@ -27,7 +27,9 @@ Nunca fala código, caminhos, links, chaves, tokens ou senhas. Se a Fish falhar,
 ## Instalar
 
 1. **Chave da Fish Audio.** Crie em [fish.audio › Desenvolvedor › Chaves API](https://fish.audio/app/api-keys/). A API é paga por uso, sem assinatura; uma fala do Arauto custa uma fração de centavo.
-2. **Guarde a chave sem ela aparecer na tela** (cole quando pedir e aperte Enter):
+2. **Guarde a chave.** O jeito mais simples: depois de instalar, abra o painel do Arauto, em **Configurações › Chave da Fish Audio**, cole a chave e clique em Salvar. O Arauto testa a chave na Fish antes de guardar e depois mostra só o começo (`sk-fish-••••••••`). Pelo mesmo lugar você troca ou apaga a chave quando quiser.
+
+   Se preferir que ela não apareça na tela nem por um instante, guarde pelo Terminal (cole quando pedir e aperte Enter):
 
    ```zsh
    mkdir -p ~/.config/arauto && read -s "k?Chave da Fish Audio: " && printf 'Authorization: Bearer %s\n' "$k" > ~/.config/arauto/fish-audio.header && chmod 600 ~/.config/arauto/fish-audio.header && unset k && echo ok
@@ -42,6 +44,8 @@ Nunca fala código, caminhos, links, chaves, tokens ou senhas. Se a Fish falhar,
    Responda `y` para adicionar o marketplace e Enter no escopo de usuário. Ele passa a rodar em toda sessão nova do Claude Code neste Mac.
 
 4. **Opcional, para começar a falar mais rápido:** `brew install mpg123`.
+
+A chave fica em `~/.config/arauto/fish-audio.header`, só com permissão para o seu usuário, e não passa pelo Claude. Sem chave, o Arauto fala com a voz do Mac.
 
 Abra uma sessão nova: o painel do Arauto aparece na lateral. `/arauto` abre o painel a qualquer momento.
 
