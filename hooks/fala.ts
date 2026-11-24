@@ -65,6 +65,7 @@ function encurtar(texto: string, maxFrases: number): string {
   let t = escolhidas.join(' ')
   const todas = t.split(/\s+/)
   if (todas.length > limite) t = `${todas.slice(0, limite).join(' ').replace(/[,;:]$/, '')}.`
+  if (!t) return ''
   return /[.!?…]$/.test(t) ? t : `${t}.`
 }
 
@@ -124,14 +125,17 @@ export type PedidoDeFrase = {
   instrucao: string
   material: string
   config: Config
+  // Pode ficar quieto: sem nada que valha dizer, devolve frase vazia em vez da fixa.
+  calar?: boolean
 }
 
 export type Completar = (pedido: ModelCompleteRequest) => Promise<ModelCompleteResult>
 
 export async function gerarFrase(
   completar: Completar,
-  { tipo, instrucao, material, config }: PedidoDeFrase,
+  { tipo, instrucao, material, config, calar }: PedidoDeFrase,
 ): Promise<{ texto: string; emocao: Emocao; uso?: Uso }> {
+  const reserva = () => (calar ? { texto: '', emocao: 'neutro' as Emocao } : fraseFixa(config.persona, tipo))
   const persona = PERSONAS[config.persona]
   const system = [
     'Você é o Arauto, a voz do Claude Code. Fala com o usuário em português do Brasil, em voz alta.',
@@ -148,19 +152,19 @@ export async function gerarFrase(
   const prompt = `${instrucao}\n\n<material>\n${material.slice(0, 6000)}\n</material>`
   try {
     const r = await completar({ model: 'haiku', system, prompt, maxTokens: 220, timeoutMs: 12000 })
-    if (!r.isAnswered) return fraseFixa(config.persona, tipo)
+    if (!r.isAnswered) return reserva()
     const uso = { entrada: r.usage?.input_tokens ?? 0, saida: r.usage?.output_tokens ?? 0 }
     const json = r.text.match(/\{[\s\S]*\}/)?.[0]
     const dados = json ? (JSON.parse(json) as { emocao?: string; frase?: string }) : {}
     const texto = limpar(dados.frase ?? '', config.maxFrases)
-    if (!texto) return { ...fraseFixa(config.persona, tipo), uso }
+    if (!texto) return { ...reserva(), uso }
     const emocao =
       config.emocao === 'neutra' || !EMOCOES.includes(dados.emocao as Emocao)
         ? 'neutro'
         : (dados.emocao as Emocao)
     return { texto, emocao, uso }
   } catch {
-    return fraseFixa(config.persona, tipo)
+    return reserva()
   }
 }
 

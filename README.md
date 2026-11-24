@@ -17,6 +17,7 @@ Um mod do Claude Code (funciona no terminal e na aba Code do app Claude no Mac).
 | Vozes por agente | Cada subagente fala com uma voz |
 | Ferramenta falar | O próprio Claude decide quando avisar e com que emoção |
 | Tema de personagem | Uma saudação ao abrir a sessão |
+| Pensamento | Desligado por padrão. Ligado, conta de passagem o que está pensando no meio de tarefas com várias etapas. O nível escolhe quanto: Só o essencial (descobertas e mudanças de plano, no máximo a cada 2 min), Normal (também o fim de cada etapa grande, a cada 1 min) ou Tudo (quase cada passo, a cada 20 s) |
 | `/resumo` | Resumo do que rodou, em formato de podcast com duas vozes |
 | `/voz` | Liga, desliga ou troca a voz (`/voz fish`, `/voz mac`) |
 

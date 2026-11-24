@@ -8,6 +8,9 @@ export type FuncaoId =
   | 'temaPersonagem'
   | 'confirmacaoInicio'
   | 'lerInteira'
+  | 'pensamento'
+
+export type NivelPensamento = 'essencial' | 'normal' | 'tudo'
 
 export type Persona = 'seco' | 'empolgado' | 'professor' | 'mordomo'
 
@@ -38,9 +41,10 @@ export type Config = {
   maxFrases: number
   minSegundos: number
   dizerProjeto: boolean
+  nivelPensamento: NivelPensamento
 }
 
-export type TipoFala = 'fim' | 'preciso' | 'erro' | 'agente' | 'ferramenta' | 'tema' | 'inicio' | 'resumo' | 'amostra'
+export type TipoFala = 'fim' | 'preciso' | 'erro' | 'agente' | 'ferramenta' | 'tema' | 'inicio' | 'resumo' | 'amostra' | 'pensamento'
 
 export type Locutor = 0 | 1
 

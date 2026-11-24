@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, Timer } from 'claude-code'
 
-import type { ChaveFish, Config, Emocao, Fala, FuncaoId, Motor, Persona, Replica, Secao, Tempos, TipoAgente, TipoFala } from '../types'
+import type { ChaveFish, Config, Emocao, Fala, FuncaoId, Motor, NivelPensamento, Persona, Replica, Secao, Tempos, TipoAgente, TipoFala } from '../types'
 import { PERSONAS, fraseFixa, gerarDialogo, gerarFrase, limpar } from './fala'
 import type { PedidoDeFrase } from './fala'
 import { MOTORES, VOZES_AGENTE_PADRAO, VOZ_PADRAO, custoFish, motorDe, nomeDaVoz, parceira } from './voz'
@@ -24,7 +24,31 @@ const FUNCOES: readonly { id: FuncaoId; nome: string; padrao: boolean }[] = [
   { id: 'temaPersonagem', nome: 'Tema de personagem', padrao: true },
   { id: 'confirmacaoInicio', nome: 'Confirmação de início', padrao: false },
   { id: 'lerInteira', nome: 'Ler a resposta inteira', padrao: false },
+  { id: 'pensamento', nome: 'Pensamento', padrao: false },
 ]
+
+// Cada nível junta o que vale dizer e o intervalo mínimo entre duas falas.
+const NIVEIS: Record<NivelPensamento, { nome: string; intervalo: number; criterio: string }> = {
+  essencial: {
+    nome: 'Só o essencial',
+    intervalo: 120,
+    criterio:
+      'Só fale se houver uma descoberta (como a causa de um problema), uma mudança de plano ou algo inesperado. Rotina, como ler arquivos, procurar ou rodar de novo, não vale falar.',
+  },
+  normal: {
+    nome: 'Normal',
+    intervalo: 60,
+    criterio:
+      'Fale se houver uma descoberta, uma mudança de plano, algo inesperado ou o fim de uma etapa grande da tarefa. Rotina miúda não vale falar.',
+  },
+  tudo: {
+    nome: 'Tudo',
+    intervalo: 20,
+    criterio: 'Conte em poucas palavras o que está fazendo ou pensando agora. Só fique quieto se for repetir o que já disse.',
+  },
+}
+
+const CONSULTA_MINIMA_MS = 15_000
 
 const VERSAO_CONFIG = 2
 
@@ -42,6 +66,7 @@ const PADRAO: Config = {
   maxFrases: 2,
   minSegundos: 20,
   dizerProjeto: false,
+  nivelPensamento: 'essencial',
 }
 
 const VELOCIDADES = [
@@ -65,7 +90,7 @@ const ROTULO_AGENTE: Record<TipoAgente, string> = {
   codigo: 'código',
 }
 
-const config = atom({ plugin: 'arauto', key: 'config' } as const, PADRAO, { shape: 'config-2' })
+const config = atom({ plugin: 'arauto', key: 'config' } as const, PADRAO, { shape: 'config-3' })
 const agora = atom({ plugin: 'arauto', key: 'agora' } as const, null, { shape: 'fala-2' })
 const estado = atom({ plugin: 'arauto', key: 'estado' } as const, 'pronto')
 const gasto = atom(
@@ -90,6 +115,7 @@ type Tarefa = {
   semPrefixo?: boolean
   motor?: Motor
   guardado?: string
+  turno?: string
   gerar: () => Promise<Gerada | null>
 }
 
@@ -114,6 +140,7 @@ type Turno = { id: string; texto: string; aviso?: Timer; errosFalados: number }
 type Nucleo = {
   enfileirar: (tarefa: Tarefa) => void
   saudar: () => Promise<void>
+  pensar: (turnId: string, trecho: string) => Promise<void>
   frase: (pedido: PedidoDeFrase) => Promise<Gerada | null>
   salvarConfig: (mudar: (c: Config) => Config) => Promise<void>
   definirMudo: (mudo?: boolean) => Promise<void>
@@ -201,6 +228,8 @@ export const register: Register = on => {
   let contador = 0
   let fishFalhando = false
   let saudacaoPendente = false
+  let tipoAtual: TipoFala | null = null
+  const pensando = { inicio: 0, acumulado: '', ultimaFala: 0, ultimaConsulta: 0, dito: '' }
   const pendentes = new Map<string, Pendencia>()
 
   on('session.start', async ($, e, next) => {
@@ -289,6 +318,7 @@ export const register: Register = on => {
             continue
           }
           if (tarefa.pendencia && !pendentes.has(tarefa.pendencia)) continue
+          if (tarefa.tipo === 'pensamento' && (tarefa.turno !== turno?.id || fila.length > 0)) continue
           try {
             const raiz = await $.session.root()
             projeto = raiz.split('/').filter(Boolean).pop() ?? projeto
@@ -316,6 +346,7 @@ export const register: Register = on => {
           await atualizarStatus()
           const controle = new AbortController()
           atual = controle
+          tipoAtual = tarefa.tipo
           await marcar(tarefa.guardado, 'falando')
           const recursos: Recursos = {
             falarNoSistema: (t, opcoes) => $.audio.speak(t, opcoes),
@@ -383,6 +414,7 @@ export const register: Register = on => {
             if (!controle.signal.aborted) $.ui.log(`Arauto: não consegui falar (${String(erro)})`)
           } finally {
             atual = null
+            tipoAtual = null
             await soltarVez()
           }
         }
@@ -394,6 +426,11 @@ export const register: Register = on => {
     }
 
     const enfileirar = (tarefa: Tarefa) => {
+      // Qualquer aviso de verdade passa na frente do pensamento e corta o que estiver tocando dele.
+      if (tarefa.tipo !== 'pensamento') {
+        fila = fila.filter(t => t.tipo !== 'pensamento')
+        if (tipoAtual === 'pensamento') atual?.abort('prioridade')
+      }
       fila.push({ criada: Date.now(), ...tarefa })
       $.clock.after(0, () => void tocar())
     }
@@ -555,8 +592,39 @@ export const register: Register = on => {
       }
     }
 
+    const pensar = async (turnId: string, trecho: string) => {
+      const c = await read($, config)
+      if (!ligada(c, 'pensamento') || c.funcoes.lerInteira || turno?.id !== turnId) return
+      pensando.acumulado = `${pensando.acumulado}\n${trecho}`.slice(-5000)
+      const nivel = NIVEIS[c.nivelPensamento] ?? NIVEIS.essencial
+      const agoraMs = await $.clock.now()
+      if (agoraMs - pensando.inicio < 20_000 || agoraMs - pensando.ultimaFala < nivel.intervalo * 1000) return
+      if (agoraMs - pensando.ultimaConsulta < CONSULTA_MINIMA_MS) return
+      if (tocando || fila.length > 0 || pendentes.size > 0) return
+      pensando.ultimaConsulta = agoraMs
+      const material = `Pedido: ${turno?.texto ?? ''}\n\nO que pensei e fiz nas últimas etapas:\n${pensando.acumulado}`
+      pensando.acumulado = ''
+      const antes = pensando.dito ? ` Já disse antes: "${pensando.dito}". Não repita isso.` : ''
+      const instrucao = `Estou no meio de uma tarefa com várias etapas e conto em voz alta, de passagem, o que estou pensando. ${nivel.criterio} Uma frase curta, em primeira pessoa, no presente.${antes} Se não valer falar, devolva a frase vazia.`
+      enfileirar({
+        tipo: 'pensamento',
+        turno: turnId,
+        semPrefixo: true,
+        rotulo: 'pensamento',
+        gerar: async () => {
+          const g = await frase({ tipo: 'pensamento', instrucao, material, config: { ...c, maxFrases: 1 }, calar: true })
+          if (g?.texto) {
+            pensando.dito = g.texto
+            pensando.ultimaFala = await $.clock.now()
+          }
+          return g
+        },
+      })
+    }
+
     nucleo = {
       saudar,
+      pensar,
       enfileirar,
       frase,
       salvarConfig,
@@ -651,6 +719,7 @@ export const register: Register = on => {
     const r = await next(e)
     if (e.agentId) return r
     if (saudacaoPendente) await nucleo?.saudar()
+    Object.assign(pensando, { inicio: await $.clock.now(), acumulado: '', ultimaFala: 0, ultimaConsulta: 0, dito: '' })
     turno?.aviso?.cancel()
     const este: Turno = { id: e.turnId, texto: e.text, errosFalados: 0 }
     turno = este
@@ -666,9 +735,32 @@ export const register: Register = on => {
     return r
   })
 
+  // Pensamento: a cada etapa intermediária (a que termina chamando ferramentas), junta o
+  // raciocínio visível, o texto e as ferramentas, e deixa o núcleo decidir se vale falar.
+  on('turn.step', async function* ($, e, next) {
+    const fluxo = next(e)
+    let pensado = ''
+    for await (const parte of fluxo) {
+      if (parte.kind === 'thinking') pensado += parte.text
+      yield parte
+    }
+    const r = await fluxo.result
+    if (e.agentId || r.stopReason !== 'tool_use' || !nucleo) return r
+    const ferramentas = r.toolUses
+      .map(u => {
+        const d = (u.input as { description?: unknown } | null)?.description
+        return typeof d === 'string' ? `${u.name}: ${d}` : u.name
+      })
+      .join('; ')
+    const trecho = [pensado.trim(), r.answer.trim(), ferramentas && `Ferramentas: ${ferramentas}`].filter(Boolean).join('\n')
+    if (trecho) void nucleo.pensar(e.turnId, trecho.slice(0, 3000))
+    return r
+  })
+
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId) return r
+    fila = fila.filter(t => t.tipo !== 'pensamento')
     const sessao = await $.session.id()
     const guardar = (aviso: Omit<AvisoGuardado, 'turnId' | 'quando' | 'sessao'>) =>
       $.store.set('fim', { turnId: e.turnId, sessao, quando: Date.now(), ...aviso })
@@ -1025,7 +1117,7 @@ export const register: Register = on => {
           'funcoes',
           'Funções',
           <Box flexDirection="column" gap={1}>
-            {FUNCOES.map(f =>
+            {FUNCOES.flatMap(f => [
               linha(
                 `funcao-${f.id}`,
                 f.nome,
@@ -1033,7 +1125,26 @@ export const register: Register = on => {
                   salvar(atualCfg => ({ ...atualCfg, funcoes: { ...atualCfg.funcoes, [f.id]: !atualCfg.funcoes[f.id] } })),
                 ),
               ),
-            )}
+              ...(f.id === 'pensamento' && c.funcoes.pensamento
+                ? [
+                    linha(
+                      'nivel-pensamento',
+                      'Nível do pensamento',
+                      <Select
+                        key="nivel-pensamento"
+                        value={c.nivelPensamento}
+                        options={(Object.keys(NIVEIS) as NivelPensamento[]).map(v => ({ value: v, label: NIVEIS[v].nome }))}
+                        onSelect={v =>
+                          salvar(atualCfg => ({
+                            ...atualCfg,
+                            nivelPensamento: v === 'normal' || v === 'tudo' ? v : 'essencial',
+                          }))
+                        }
+                      />,
+                    ),
+                  ]
+                : []),
+            ])}
             {linha('resumo', 'Resumo falado do que rodou', <Button key="resumo" label="Ouvir" onPress={() => n?.resumir()} />)}
           </Box>,
         )}

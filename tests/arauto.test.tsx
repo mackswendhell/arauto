@@ -324,6 +324,96 @@ test('aviso guardado por outra sessão não toca aqui', async ($, on) => {
   expect(ditas.length).toBe(0)
 })
 
+function etapas(on: On, passos: { pensado: string; texto?: string; ferramenta?: string }[]) {
+  on('turn.step', async function* (_, e) {
+    const p = passos[e.index] ?? { pensado: '' }
+    if (p.pensado) yield { kind: 'thinking' as const, index: 0, text: p.pensado }
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: p.texto ?? '',
+      toolUses: p.ferramenta ? [{ name: 'Bash', input: { description: p.ferramenta } }] : [],
+      stopReason: p.ferramenta ? ('tool_use' as const) : ('end_turn' as const),
+      usage: null,
+    }
+  })
+}
+
+const passo = async ($: Engine, index: number) => {
+  const s = $.turn.step({ turnId: 't1', index, model: 'opus', messageCount: 3 })
+  for await (const _ of s) void _
+  return s.result
+}
+
+test('pensamento ligado: fala a descoberta no meio da tarefa, no nível escolhido', async ($, on) => {
+  const { ditas, clock, pedidosAoModelo } = motor(on, '{"emocao":"calmo","frase":"Achei a causa, o teste usava a data errada."}', {
+    config: { funcoes: { temaPersonagem: false, pensamento: true }, nivelPensamento: 'normal' },
+  })
+  etapas(on, [
+    { pensado: 'Vou ler os testes.', ferramenta: 'Lê os testes' },
+    { pensado: 'A causa é o fuso horário na data do teste.', ferramenta: 'Corrige o teste' },
+    { pensado: 'Agora rodo de novo.', ferramenta: 'Roda os testes' },
+  ])
+  await $.session.start(inicio)
+  await $.turn.start({ text: 'conserta os testes', turnId: 't1' })
+  await passo($, 0)
+  await clock.settle()
+  expect(pedidosAoModelo.length).toBe(0)
+  await clock.advance(25_000)
+  await passo($, 1)
+  await clock.settle()
+  expect(pedidosAoModelo.length).toBe(1)
+  expect(pedidosAoModelo[0]).toContain('fuso horário')
+  expect(pedidosAoModelo[0]).toContain('Lê os testes')
+  expect(ditas.map(d => d.texto)).toEqual(['[calmo] Achei a causa, o teste usava a data errada.'])
+  await clock.advance(20_000)
+  await passo($, 2)
+  await clock.settle()
+  expect(pedidosAoModelo.length).toBe(1)
+})
+
+test('pensamento: o modelo pode ficar quieto', async ($, on) => {
+  const { ditas, clock, pedidosAoModelo } = motor(on, '{"emocao":"neutro","frase":""}', {
+    config: { funcoes: { temaPersonagem: false, pensamento: true }, nivelPensamento: 'tudo' },
+  })
+  etapas(on, [{ pensado: 'Leio o arquivo.', ferramenta: 'Lê' }, { pensado: 'Leio outro.', ferramenta: 'Lê' }])
+  await $.session.start(inicio)
+  await $.turn.start({ text: 'arruma', turnId: 't1' })
+  await clock.advance(25_000)
+  await passo($, 0)
+  await clock.settle()
+  expect(pedidosAoModelo.length).toBe(1)
+  expect(ditas.map(d => d.texto)).toEqual([])
+})
+
+test('pensamento desligado (padrão) não consulta o modelo nas etapas', async ($, on) => {
+  const { ditas, clock, pedidosAoModelo } = motor(on)
+  etapas(on, [{ pensado: 'A causa é o fuso.', ferramenta: 'Corrige' }])
+  await $.session.start(inicio)
+  await $.turn.start({ text: 'arruma', turnId: 't1' })
+  await clock.advance(200_000)
+  await passo($, 0)
+  await clock.settle()
+  expect(pedidosAoModelo.length).toBe(0)
+  expect(ditas.length).toBe(0)
+})
+
+test('com Pensamento ligado aparece o nível, com três opções', async ($, on) => {
+  const { clock } = motor(on, undefined, { config: { funcoes: { temaPersonagem: false, pensamento: true } } })
+  on('session.usage', () => ({ value: { startedAt: 0, context: {}, rateLimits: [], cost: { usd: 0 } } as never }))
+  await $.session.start(inicio)
+  await clock.settle()
+  const painel = await $.ui.mount({ ...PAINEL, surface: 'desktop', props: { ...PAINEL.props, placement: 'dock' } })
+  await painel.press({ key: 'secao-funcoes' })
+  const nivel = (await painel.findAll({ type: 'Select' })).find(s => (s.key ?? s.props.key) === 'nivel-pensamento')
+  expect(nivel?.props.value).toBe('essencial')
+  expect((nivel?.props.options as { label: string }[]).map(o => o.label)).toEqual(['Só o essencial', 'Normal', 'Tudo'])
+  await painel.press({ key: 'funcao-pensamento' })
+  const depois = (await painel.findAll({ type: 'Select' })).find(s => (s.key ?? s.props.key) === 'nivel-pensamento')
+  expect(depois).toBeUndefined()
+  await painel.unmount()
+})
+
 const fimDe = (durationMs: number, answer = 'feito') =>
   ({ turnId: 't1', answer, durationMs, isAborted: false, reason: 'answer' }) as const
 
@@ -515,7 +605,7 @@ test('cada seção aberta: rótulo à esquerda, controle à direita', async ($, 
   const painel = await $.ui.mount({ ...PAINEL, surface: 'desktop', props: { ...PAINEL.props, placement: 'dock' } })
   for (const id of ['funcoes', 'voz', 'config']) await painel.press({ key: `secao-${id}` })
   const funcoes = (await painel.findAll({ type: 'Button' })).filter(b => String(b.key ?? b.props.key ?? '').startsWith('funcao-'))
-  expect(funcoes.length).toBe(9)
+  expect(funcoes.length).toBe(10)
   for (const b of funcoes) expect(['Ligado', 'Desligado']).toContain(b.props.label)
   const fileiras = (await painel.findAll({ type: 'Box' })).filter(b => b.props.justifyContent === 'space-between')
   expect(fileiras.length).toBeGreaterThan(20)
