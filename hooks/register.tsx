@@ -97,6 +97,7 @@ type Tarefa = {
 // no meio (a cópia antiga é descartada), a cópia nova fala de novo.
 type AvisoGuardado = {
   turnId: string
+  sessao?: string
   quando: number
   situacao: 'na fila' | 'falando' | 'falado' | 'pulado'
   motivo?: string
@@ -112,6 +113,7 @@ type Turno = { id: string; texto: string; aviso?: Timer; errosFalados: number }
 
 type Nucleo = {
   enfileirar: (tarefa: Tarefa) => void
+  saudar: () => Promise<void>
   frase: (pedido: PedidoDeFrase) => Promise<Gerada | null>
   salvarConfig: (mudar: (c: Config) => Config) => Promise<void>
   definirMudo: (mudo?: boolean) => Promise<void>
@@ -198,6 +200,7 @@ export const register: Register = on => {
   let ultimoErro = 0
   let contador = 0
   let fishFalhando = false
+  let saudacaoPendente = false
   const pendentes = new Map<string, Pendencia>()
 
   on('session.start', async ($, e, next) => {
@@ -542,7 +545,18 @@ export const register: Register = on => {
       await update($, chaveFish, atual => ({ ...atual, editando, aviso: undefined }))
     }
 
+    const saudar = async () => {
+      saudacaoPendente = false
+      if (await read($, saudou)) return
+      await update($, saudou, () => true)
+      const c = await read($, config)
+      if (ligada(c, 'temaPersonagem')) {
+        enfileirar({ tipo: 'tema', semPrefixo: true, fixa: true, gerar: async () => fraseFixa(c.persona, 'tema') })
+      }
+    }
+
     nucleo = {
+      saudar,
       enfileirar,
       frase,
       salvarConfig,
@@ -617,7 +631,10 @@ export const register: Register = on => {
     }
     const c = await read($, config)
     const guardado = (await $.store.get('fim')) as AvisoGuardado | undefined
-    if (guardado?.situacao === 'na fila' && Date.now() - guardado.quando < 180_000) {
+    // O app abre processos reserva (pasta spare-…) antes de você abrir a próxima sessão:
+    // ali o mod não pode falar nada, nem repetir o aviso de outra sessão.
+    const reserva = /^spare-/.test(projeto)
+    if (!reserva && guardado?.situacao === 'na fila' && guardado.sessao === sessao && Date.now() - guardado.quando < 180_000) {
       const { instrucao, material = '', texto, emocao = 'neutro' } = guardado
       if (texto) {
         enfileirar({ tipo: 'fim', guardado: guardado.turnId, gerar: async () => ({ texto, emocao }) })
@@ -625,18 +642,15 @@ export const register: Register = on => {
         enfileirar({ tipo: 'fim', guardado: guardado.turnId, gerar: () => frase({ tipo: 'fim', instrucao, material, config: c }) })
       }
     }
-    if (!(await read($, saudou))) {
-      await update($, saudou, () => true)
-      if (ligada(c, 'temaPersonagem')) {
-        enfileirar({ tipo: 'tema', semPrefixo: true, fixa: true, gerar: async () => fraseFixa(c.persona, 'tema') })
-      }
-    }
+    if (reserva) saudacaoPendente = true
+    else await nucleo?.saudar()
     return next(e)
   })
 
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId) return r
+    if (saudacaoPendente) await nucleo?.saudar()
     turno?.aviso?.cancel()
     const este: Turno = { id: e.turnId, texto: e.text, errosFalados: 0 }
     turno = este
@@ -655,8 +669,9 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId) return r
-    const guardar = (aviso: Omit<AvisoGuardado, 'turnId' | 'quando'>) =>
-      $.store.set('fim', { turnId: e.turnId, quando: Date.now(), ...aviso })
+    const sessao = await $.session.id()
+    const guardar = (aviso: Omit<AvisoGuardado, 'turnId' | 'quando' | 'sessao'>) =>
+      $.store.set('fim', { turnId: e.turnId, sessao, quando: Date.now(), ...aviso })
     for (let i = 0; !nucleo && i < 50; i++) await $.clock.sleep(100)
     const n = nucleo
     const capturada = ((await $.store.get('linha')) as LinhaFalada | undefined) ?? extrairLinha(e.answer)

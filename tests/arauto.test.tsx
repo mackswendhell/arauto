@@ -282,7 +282,7 @@ test('fim de turno que chega antes do mod ficar pronto ainda é falado', async (
 
 test('aviso perdido num recarregamento é falado pela cópia nova', async ($, on) => {
   const { ditas, clock } = motor(on, undefined, {
-    fim: { turnId: 't9', quando: Date.now() - 5_000, situacao: 'na fila', instrucao: 'Avise que terminei.', material: 'ok' },
+    fim: { turnId: 't9', sessao: 'sessao-teste', quando: Date.now() - 5_000, situacao: 'na fila', instrucao: 'Avise que terminei.', material: 'ok' },
   })
   await $.session.start(inicio)
   await clock.settle()
@@ -295,6 +295,29 @@ test('aviso perdido num recarregamento é falado pela cópia nova', async ($, on
 test('aviso já falado não se repete depois de recarregar', async ($, on) => {
   const { ditas, clock } = motor(on, undefined, {
     fim: { turnId: 't9', quando: Date.now() - 5_000, situacao: 'falado', instrucao: 'x', material: 'ok' },
+  })
+  await $.session.start(inicio)
+  await clock.settle()
+  expect(ditas.length).toBe(0)
+})
+
+test('sessão reserva do app não cumprimenta nem repete o aviso de outra sessão', async ($, on) => {
+  const { ditas, clock } = motor(on, undefined, {
+    config: { funcoes: { temaPersonagem: true } },
+    fim: { turnId: 't9', sessao: 'outra', quando: Date.now() - 5_000, situacao: 'na fila', texto: 'Terminei a outra.', emocao: 'neutro' },
+  })
+  await $.session.start({ ...inicio, cwd: '/private/var/folders/xx/T/spare-abc123' })
+  await clock.settle()
+  expect(ditas.length).toBe(0)
+  await $.turn.start({ text: 'cria a página', turnId: 't1' })
+  await clock.settle()
+  expect(ditas.length).toBe(1)
+  expect(ditas[0]?.texto).toContain('dispor')
+})
+
+test('aviso guardado por outra sessão não toca aqui', async ($, on) => {
+  const { ditas, clock } = motor(on, undefined, {
+    fim: { turnId: 't9', sessao: 'outra', quando: Date.now() - 5_000, situacao: 'na fila', texto: 'Terminei a outra.', emocao: 'neutro' },
   })
   await $.session.start(inicio)
   await clock.settle()
