@@ -103,6 +103,15 @@ const abertas = atom({ plugin: 'arauto', key: 'abertas' } as const, ['agora'], {
 const saudou = atom({ plugin: 'arauto', key: 'saudou' } as const, false)
 const chaveFish = atom({ plugin: 'arauto', key: 'chave' } as const, SEM_CHAVE, { shape: 'chave-1' })
 
+// Desligado (/arauto off) vale para todas as sessões: fica no store, que é um arquivo só,
+// e não no state, que cada sessão tem o seu.
+type Ctx = Parameters<typeof read>[0] & { store: { get: (key: string) => Promise<unknown> } }
+const estaDesligado = async ($: Ctx) => (await $.store.get('desligado')) === true
+const lerConfig = async ($: Ctx): Promise<Config> => {
+  const c = await read($, config)
+  return (await estaDesligado($)) ? { ...c, mudo: true } : c
+}
+
 type Gerada = { texto: string; emocao: Emocao; replicas?: Replica[] }
 
 type Tarefa = {
@@ -144,6 +153,9 @@ type Nucleo = {
   frase: (pedido: PedidoDeFrase) => Promise<Gerada | null>
   salvarConfig: (mudar: (c: Config) => Config) => Promise<void>
   definirMudo: (mudo?: boolean) => Promise<void>
+  ligar: () => Promise<void>
+  desligar: () => Promise<void>
+  esconder: () => Promise<void>
   aguardar: (tool: string, atraso: number) => void
   resolverFerramenta: (tool: string) => Promise<void>
   resolverTodas: () => Promise<void>
@@ -237,6 +249,10 @@ export const register: Register = on => {
     const sessao = await $.session.id()
 
     const atualizarStatus = async () => {
+      if (await estaDesligado($)) {
+        $.ui.status(undefined)
+        return
+      }
       const c = await read($, config)
       const s = await read($, estado)
       const rotulo = c.mudo ? 'mudo' : s === 'falando' ? 'falando' : s === 'esperando' ? 'esperando você' : 'pronto'
@@ -251,7 +267,7 @@ export const register: Register = on => {
 
     const definirMudo = async (mudo?: boolean) => {
       await salvarConfig(c => ({ ...c, mudo: mudo ?? !c.mudo }))
-      if ((await read($, config)).mudo) {
+      if ((await lerConfig($)).mudo) {
         fila = []
         atual?.abort('mudo')
       }
@@ -303,7 +319,7 @@ export const register: Register = on => {
         while (fila.length > 0) {
           const tarefa = fila.shift()
           if (!tarefa) break
-          if ((await read($, config)).mudo) {
+          if ((await lerConfig($)).mudo) {
             fila = []
             break
           }
@@ -312,7 +328,7 @@ export const register: Register = on => {
           const inicioGerar = Date.now()
           const gerada = await tarefa.gerar()
           const fimGerar = Date.now()
-          const c = await read($, config)
+          const c = await lerConfig($)
           if (!gerada?.texto || c.mudo) {
             await marcar(tarefa.guardado, 'pulado', c.mudo ? 'mudo' : 'frase vazia')
             continue
@@ -438,7 +454,7 @@ export const register: Register = on => {
     const chamar = async (id: string, repetindo: boolean) => {
       const p = pendentes.get(id)
       if (!p) return
-      const c = await read($, config)
+      const c = await lerConfig($)
       if (!ligada(c, 'precisoDeVoce')) return
       await update($, estado, () => 'esperando')
       await atualizarStatus()
@@ -476,7 +492,7 @@ export const register: Register = on => {
     }
 
     const avisarErro = async (comando: string, saida: string) => {
-      const c = await read($, config)
+      const c = await lerConfig($)
       if (!ligada(c, 'erroGravidade')) return
       const texto = saida.trim()
       if (texto.length < 20 || /^exit code \d+\s*$/i.test(texto)) return
@@ -499,7 +515,7 @@ export const register: Register = on => {
 
     const resumir = async (): Promise<string> => {
       const lista = await read($, rodadas)
-      const c = await read($, config)
+      const c = await lerConfig($)
       if (lista.length === 0) {
         const vazio = 'Ainda não rodou nada nesta sessão.'
         enfileirar({ tipo: 'resumo', semPrefixo: true, gerar: async () => ({ texto: vazio, emocao: 'neutro' }) })
@@ -545,6 +561,26 @@ export const register: Register = on => {
       await $.ui.open({ id: CARTAO, title: 'Arauto', placement: 'widget' })
     }
 
+    const esconder = async () => {
+      await $.ui.close({ id: PANE })
+      await $.ui.close({ id: CARTAO })
+      $.ui.status(undefined)
+    }
+
+    const desligar = async () => {
+      await $.store.set('desligado', true)
+      fila = []
+      atual?.abort('desligado')
+      await resolverTodas()
+      await esconder()
+    }
+
+    const ligar = async () => {
+      await $.store.delete('desligado')
+      await definirMudo(false)
+      await abrirPainel()
+    }
+
     const rodarScript = (argv: readonly string[], init?: { stdin?: string; timeoutMs?: number }) =>
       $.process.run(argv, init)
 
@@ -586,14 +622,14 @@ export const register: Register = on => {
       saudacaoPendente = false
       if (await read($, saudou)) return
       await update($, saudou, () => true)
-      const c = await read($, config)
+      const c = await lerConfig($)
       if (ligada(c, 'temaPersonagem')) {
         enfileirar({ tipo: 'tema', semPrefixo: true, fixa: true, gerar: async () => fraseFixa(c.persona, 'tema') })
       }
     }
 
     const pensar = async (turnId: string, trecho: string) => {
-      const c = await read($, config)
+      const c = await lerConfig($)
       if (!ligada(c, 'pensamento') || c.funcoes.lerInteira || turno?.id !== turnId) return
       pensando.acumulado = `${pensando.acumulado}\n${trecho}`.slice(-5000)
       const nivel = NIVEIS[c.nivelPensamento] ?? NIVEIS.essencial
@@ -629,6 +665,9 @@ export const register: Register = on => {
       frase,
       salvarConfig,
       definirMudo,
+      ligar,
+      desligar,
+      esconder,
       aguardar,
       resolverFerramenta,
       resolverTodas,
@@ -671,7 +710,11 @@ export const register: Register = on => {
       argumentHint: '[liga | desliga | lista | nome da voz]',
     })
     await $.command.register({ name: 'resumo', description: 'Arauto: resumo falado do que rodou na sessão' })
-    await $.command.register({ name: 'arauto', description: 'Arauto: abre o painel' })
+    await $.command.register({
+      name: 'arauto',
+      description: 'Arauto: abre o painel; on liga e off desliga em todas as sessões',
+      argumentHint: '[on | off]',
+    })
     await $.tool.register({
       name: 'falar',
       description:
@@ -690,6 +733,7 @@ export const register: Register = on => {
       isDeferred: false,
     })
     await atualizarStatus()
+    if (await estaDesligado($)) return next(e)
     const abertos = await $.ui.panes().then(
       lista => lista.map(p => p.id),
       () => [] as string[],
@@ -697,7 +741,7 @@ export const register: Register = on => {
     if (e.surface !== 'terminal' && !abertos.includes(PANE) && !abertos.includes(CARTAO)) {
       void $.ui.open({ id: CARTAO, title: 'Arauto', placement: 'widget' })
     }
-    const c = await read($, config)
+    const c = await lerConfig($)
     const guardado = (await $.store.get('fim')) as AvisoGuardado | undefined
     // O app abre processos reserva (pasta spare-…) antes de você abrir a próxima sessão:
     // ali o mod não pode falar nada, nem repetir o aviso de outra sessão.
@@ -718,6 +762,10 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId) return r
+    if (await estaDesligado($)) {
+      await nucleo?.esconder()
+      return r
+    }
     if (saudacaoPendente) await nucleo?.saudar()
     Object.assign(pensando, { inicio: await $.clock.now(), acumulado: '', ultimaFala: 0, ultimaConsulta: 0, dito: '' })
     turno?.aviso?.cancel()
@@ -725,7 +773,7 @@ export const register: Register = on => {
     turno = este
     await $.store.set('turno', { id: e.turnId, texto: e.text.slice(0, 500) })
     await $.store.delete('linha')
-    const c = await read($, config)
+    const c = await lerConfig($)
     if (nucleo && ligada(c, 'confirmacaoInicio') && e.text) {
       const n = nucleo
       este.aviso = n.depois(12_000, () => {
@@ -778,7 +826,7 @@ export const register: Register = on => {
     await update($, rodadas, l =>
       [...l, { pedido: pedido.slice(0, 500), resposta: resposta.slice(0, 1500), segundos }].slice(-30),
     )
-    const c = await read($, config)
+    const c = await lerConfig($)
     if (c.mudo || e.isAborted) {
       await guardar({ situacao: 'pulado', motivo: c.mudo ? 'mudo' : 'interrompida' })
       return r
@@ -842,7 +890,7 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     if (e.command) return next(e)
-    const c = await read($, config)
+    const c = await lerConfig($)
     const fala = !c.mudo && !c.funcoes.lerInteira && (c.funcoes.fimTarefa || c.funcoes.respostaFalada)
     if (!fala) return next(e)
     return next({ ...e, context: [...(e.context ?? []), instrucaoDaLinha(c)] })
@@ -898,7 +946,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: FERRAMENTA }, async ($, e) => {
     const entrada = e as unknown as { frase?: unknown; emocao?: unknown }
-    const c = await read($, config)
+    const c = await lerConfig($)
     if (!nucleo || !ligada(c, 'ferramentaFalar')) {
       return { result: 'O Arauto está mudo ou com a ferramenta falar desligada; nada foi dito.' }
     }
@@ -911,7 +959,7 @@ export const register: Register = on => {
 
   on('agent.report', async ($, e, next) => {
     const r = await next(e)
-    const c = await read($, config)
+    const c = await lerConfig($)
     const n = nucleo
     if (n && ligada(c, 'vozesAgente') && !e.parentAgentId) {
       const tipo = tipoDeAgente(`${e.subagentType} ${e.text.slice(0, 400)}`)
@@ -975,8 +1023,22 @@ export const register: Register = on => {
     text: nucleo ? await nucleo.resumir() : 'O Arauto ainda está carregando.',
   }))
 
-  on('command.run', { command: 'arauto' }, async () => {
-    await nucleo?.abrirPainel()
+  on('command.run', { command: 'arauto' }, async ($, e) => {
+    const n = nucleo
+    if (!n) return { text: 'O Arauto ainda está carregando.', isTextDisplayOnly: true }
+    const arg = e.args.trim()
+    if (/^(off|desliga|desligar)$/i.test(arg)) {
+      await n.desligar()
+      return { text: 'Arauto desligado em todas as sessões. Para voltar: /arauto on', isTextDisplayOnly: true }
+    }
+    if (arg && !/^(on|liga|ligar)$/i.test(arg)) {
+      return { text: 'Use /arauto on para ligar ou /arauto off para desligar.', isTextDisplayOnly: true }
+    }
+    if (arg || (await estaDesligado($))) {
+      await n.ligar()
+      return { text: 'Arauto ligado em todas as sessões.', isTextDisplayOnly: true }
+    }
+    await n.abrirPainel()
     return { text: 'Painel do Arauto aberto.', isTextDisplayOnly: true }
   })
 
@@ -993,6 +1055,7 @@ export const register: Register = on => {
     const salvar = (mudar: (atualCfg: Config) => Config) => n?.salvarConfig(mudar)
 
     const botaoMudo = <Button key="mudo" label={c.mudo ? 'Ligar som' : 'Mudo'} onPress={() => n?.definirMudo()} />
+    const botaoDesligar = <Button key="desligar" label="Desligar" onPress={() => n?.desligar()} />
 
 
     if (e.props.placement === 'widget' || e.requestId === CARTAO) {
@@ -1019,6 +1082,7 @@ export const register: Register = on => {
           <Box flexDirection="row" gap={1}>
             {botaoMudo}
             <Button key="abrir" label="Abrir painel" onPress={() => n?.abrirPainel()} />
+            {botaoDesligar}
           </Box>
         </Box>
       )
@@ -1077,6 +1141,7 @@ export const register: Register = on => {
           </Text>
           {botaoMudo}
           <Button key="minimizar" label="Minimizar" onPress={() => n?.minimizar()} />
+          {botaoDesligar}
         </Box>
 
         {secao(

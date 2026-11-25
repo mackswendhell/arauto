@@ -19,8 +19,16 @@ function motor(
   mock.store(on, { config: { funcoes: { temaPersonagem: false } }, ...store })
   on('command.register', (_, e) => ({ value: { command: e.name } }))
   on('tool.register', (_, e) => ({ value: { tool: `mcp__arauto__${e.name}` } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('ui.close', () => ({ value: undefined }))
+  const abertos: string[] = []
+  const fechados: string[] = []
+  on('ui.open', (_, e) => {
+    abertos.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_, e) => {
+    fechados.push(e.id)
+    return { value: undefined }
+  })
   on('ui.panes', () => ({ value: [] }))
   on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'sessao-teste' }))
@@ -102,7 +110,7 @@ function motor(
     return { value: undefined }
   })
   on('ui.log', () => ({ value: undefined }))
-  return { ditas, pedidosAoModelo, clock, tocados, corpos, cacheUsado, chaveGuardada }
+  return { ditas, pedidosAoModelo, clock, tocados, corpos, cacheUsado, chaveGuardada, abertos, fechados }
 }
 
 const MORDOMO = 'd9bc9ab6317040d28307ee6d89c73ca0'
@@ -234,6 +242,36 @@ test('/voz desliga deixa tudo mudo', async ($, on) => {
   await $.turn.complete({ turnId: 't1', answer: 'feito', durationMs: 60_000, isAborted: false, reason: 'answer' })
   await clock.settle()
   expect(ditas.length).toBe(0)
+})
+
+test('/arauto off cala e esconde em todas as sessões; /arauto on volta com o painel', async ($, on) => {
+  const { ditas, pedidosAoModelo, clock, abertos, fechados } = motor(on)
+  await $.session.start(inicio)
+  const r = await $.command.run({ command: 'arauto', args: 'off' } as never)
+  expect(JSON.stringify(r)).toContain('desligado')
+  expect(fechados).toContain('arauto-cartao')
+  await $.turn.start({ text: 'x', turnId: 't1' })
+  await $.turn.complete({ turnId: 't1', answer: 'feito', durationMs: 60_000, isAborted: false, reason: 'answer' })
+  await clock.settle()
+  expect(ditas.length).toBe(0)
+  expect(pedidosAoModelo.length).toBe(0)
+  abertos.length = 0
+  await $.command.run({ command: 'arauto', args: 'on' } as never)
+  expect(abertos).toContain('arauto')
+  await $.turn.start({ text: 'y', turnId: 't2' })
+  await $.turn.complete({ turnId: 't2', answer: 'feito', durationMs: 60_000, isAborted: false, reason: 'answer' })
+  await clock.settle()
+  expect(ditas.length).toBe(1)
+})
+
+test('desligado, a sessão nova não abre o cartão e /arauto sozinho liga de novo', async ($, on) => {
+  const { ditas, clock, abertos } = motor(on, undefined, { desligado: true })
+  await $.session.start(inicio)
+  await clock.settle()
+  expect(abertos).toEqual([])
+  expect(ditas.length).toBe(0)
+  await $.command.run({ command: 'arauto', args: '' } as never)
+  expect(abertos).toContain('arauto')
 })
 
 const PAINEL = {

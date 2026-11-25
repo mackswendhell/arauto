@@ -19,7 +19,9 @@ Um mod do Claude Code (funciona no terminal e na aba Code do app Claude no Mac).
 | Tema de personagem | Uma saudação ao abrir a sessão |
 | Pensamento | Desligado por padrão. Ligado, conta de passagem o que está pensando no meio de tarefas com várias etapas. O nível escolhe quanto: Só o essencial (descobertas e mudanças de plano, no máximo a cada 2 min), Normal (também o fim de cada etapa grande, a cada 1 min) ou Tudo (quase cada passo, a cada 20 s) |
 | `/resumo` | Resumo do que rodou, em formato de podcast com duas vozes |
-| `/voz` | Liga, desliga ou troca a voz (`/voz fish`, `/voz mac`) |
+| `/arauto off` | Desliga o Arauto em todas as sessões: não fala, não gasta crédito e o painel não abre mais sozinho. O botão Desligar do painel faz o mesmo |
+| `/arauto on` | Liga de novo e abre o painel (`/arauto` sozinho também liga, se estiver desligado) |
+| `/voz` | Mudo só nesta sessão, ou troca a voz (`/voz fish`, `/voz mac`) |
 
 ![Cartão Preciso de você](imagens/preciso-de-voce.png)
 
@@ -48,7 +50,7 @@ Nunca fala código, caminhos, links, chaves, tokens ou senhas. Se a Fish falhar,
 
 A chave fica em `~/.config/arauto/fish-audio.header`, só com permissão para o seu usuário, e não passa pelo Claude. Sem chave, o Arauto fala com a voz do Mac.
 
-Abra uma sessão nova: o painel do Arauto aparece na lateral. `/arauto` abre o painel a qualquer momento.
+Abra uma sessão nova: o painel do Arauto aparece na lateral. `/arauto` abre o painel a qualquer momento. Para tirar o Arauto do caminho sem desinstalar, `/arauto off`; para voltar, `/arauto on`.
 
 ## Vozes
 
